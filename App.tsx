@@ -1,26 +1,10 @@
 
-
-
-
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 // Fix: Import necessary types and classes from @google/genai for Live API implementation.
 import { GoogleGenAI, LiveServerMessage, LiveSession, Modality, Type, FunctionDeclaration, Blob as GenAI_Blob } from '@google/genai';
-import { Instrument, GridState, View, GroundingChunk, BeatPattern, Recording } from './types';
-import { INSTRUMENTS, NUM_STEPS, NUM_TRACKS, IconSpark, IconMovie, IconImageEdit, IconSearch, IconMic, IconMusicNote, IconSoundWave, VEO_LOADING_MESSAGES, IconRecord, IconKeyboard, PIANO_NOTES } from './constants';
+import { Instrument, GridState, View, GroundingChunk, BeatPattern, Recording, AllMixerSettings } from './types';
+import { INSTRUMENTS, NUM_STEPS, NUM_TRACKS, IconSpark, IconSearch, IconMic, IconMusicNote, IconRecord, IconKeyboard, PIANO_NOTES } from './constants';
 import * as geminiService from './services/geminiService';
-
-// Helper: blob to base64
-const blobToBase64 = (blob: Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            const base64data = reader.result as string;
-            resolve(base64data.split(',')[1]);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-    });
-};
 
 // Fix: Add audio encoding/decoding utilities as per Gemini API guidelines.
 function encode(bytes: Uint8Array) {
@@ -68,348 +52,19 @@ const sequencerMasterGain = audioContext.createGain();
 sequencerMasterGain.connect(audioContext.destination);
 
 
-function createKick() {
-    const osc = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    osc.frequency.setValueAtTime(150, audioContext.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
-    gain.gain.setValueAtTime(1, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
-    osc.connect(gain);
-    gain.connect(sequencerMasterGain);
-    osc.start();
-    osc.stop(audioContext.currentTime + 0.1);
-}
-
-function createSnare() {
-    const noise = audioContext.createBufferSource();
-    const bufferSize = audioContext.sampleRate;
-    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-    const output = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-        output[i] = Math.random() * 2 - 1;
-    }
-    noise.buffer = buffer;
-    const noiseFilter = audioContext.createBiquadFilter();
-    noiseFilter.type = 'highpass';
-    noiseFilter.frequency.value = 1000;
-    noise.connect(noiseFilter);
-    const noiseEnvelope = audioContext.createGain();
-    noiseFilter.connect(noiseEnvelope);
-    noiseEnvelope.connect(sequencerMasterGain);
-    noiseEnvelope.gain.setValueAtTime(1, audioContext.currentTime);
-    noiseEnvelope.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
-    noise.start();
-    noise.stop(audioContext.currentTime + 0.2);
-}
-
-function createHihat(isOpen: boolean) {
-    const noise = audioContext.createBufferSource();
-    const bufferSize = audioContext.sampleRate;
-    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-    const output = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-        output[i] = Math.random() * 2 - 1;
-    }
-    noise.buffer = buffer;
-    const bandpass = audioContext.createBiquadFilter();
-    bandpass.type = 'bandpass';
-    bandpass.frequency.value = 10000;
-    bandpass.Q.value = 1.5;
-    noise.connect(bandpass);
-    const highpass = audioContext.createBiquadFilter();
-    highpass.type = "highpass";
-    highpass.frequency.value = 7000;
-    bandpass.connect(highpass);
-    const gain = audioContext.createGain();
-    highpass.connect(gain);
-    gain.connect(sequencerMasterGain);
-    gain.gain.setValueAtTime(1, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + (isOpen ? 0.5 : 0.05));
-    noise.start();
-    noise.stop(audioContext.currentTime + (isOpen ? 0.5 : 0.05));
-}
-
-function createClap() {
-    const noise = audioContext.createBufferSource();
-    const bufferSize = audioContext.sampleRate;
-    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-    const output = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) { output[i] = Math.random() * 2 - 1; }
-    noise.buffer = buffer;
-
-    const bandpass = audioContext.createBiquadFilter();
-    bandpass.type = 'bandpass';
-    bandpass.frequency.value = 2500;
-    bandpass.Q.value = 1.0;
-    noise.connect(bandpass);
-    
-    const envelope = audioContext.createGain();
-    bandpass.connect(envelope);
-    envelope.connect(sequencerMasterGain);
-
-    const now = audioContext.currentTime;
-    envelope.gain.setValueAtTime(0, now);
-    envelope.gain.linearRampToValueAtTime(0.8, now + 0.005);
-    envelope.gain.linearRampToValueAtTime(0, now + 0.01);
-    envelope.gain.linearRampToValueAtTime(0.8, now + 0.015);
-    envelope.gain.linearRampToValueAtTime(0, now + 0.02);
-    envelope.gain.linearRampToValueAtTime(0.6, now + 0.025);
-    envelope.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
-    
-    noise.start(now);
-    noise.stop(now + 0.2);
-}
-
-function createTom() {
-    const osc = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    osc.frequency.setValueAtTime(300, audioContext.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(100, audioContext.currentTime + 0.2);
-    gain.gain.setValueAtTime(0.8, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
-    osc.connect(gain);
-    gain.connect(sequencerMasterGain);
-    osc.start();
-    osc.stop(audioContext.currentTime + 0.2);
-}
-
-function createRimshot() {
-    const osc = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(1000, audioContext.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(400, audioContext.currentTime + 0.05);
-    gain.gain.setValueAtTime(0.5, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.05);
-    osc.connect(gain);
-    gain.connect(sequencerMasterGain);
-    osc.start();
-    osc.stop(audioContext.currentTime + 0.05);
-}
-
-function createCowbell() {
-    const osc1 = audioContext.createOscillator();
-    const osc2 = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-    osc1.type = 'square';
-    osc2.type = 'square';
-    osc1.frequency.value = 540;
-    osc2.frequency.value = 810;
-    gain.gain.setValueAtTime(0.3, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
-    osc1.connect(gain);
-    osc2.connect(gain);
-    gain.connect(sequencerMasterGain);
-    osc1.start();
-    osc2.start();
-    osc1.stop(audioContext.currentTime + 0.15);
-    osc2.stop(audioContext.currentTime + 0.15);
-}
-
-function createCymbal() {
-    const noise = audioContext.createBufferSource();
-    const bufferSize = audioContext.sampleRate * 2;
-    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-    const output = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-        output[i] = Math.random() * 2 - 1;
-    }
-    noise.buffer = buffer;
-
-    const bandpass = audioContext.createBiquadFilter();
-    bandpass.type = 'bandpass';
-    bandpass.frequency.value = 12000;
-    bandpass.Q.value = 0.5;
-    noise.connect(bandpass);
-
-    const highpass = audioContext.createBiquadFilter();
-    highpass.type = "highpass";
-    highpass.frequency.value = 5000;
-    bandpass.connect(highpass);
-
-    const gain = audioContext.createGain();
-    highpass.connect(gain);
-    gain.connect(sequencerMasterGain);
-
-    gain.gain.setValueAtTime(0.5, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1.5);
-    noise.start();
-    noise.stop(audioContext.currentTime + 1.5);
-}
-
-function createShaker() {
-    const noise = audioContext.createBufferSource();
-    const bufferSize = audioContext.sampleRate;
-    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-    const output = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-        output[i] = Math.random() * 2 - 1;
-    }
-    noise.buffer = buffer;
-    const bandpass = audioContext.createBiquadFilter();
-    bandpass.type = 'bandpass';
-    bandpass.frequency.value = 8000;
-    bandpass.Q.value = 2;
-    noise.connect(bandpass);
-
-    const gain = audioContext.createGain();
-    bandpass.connect(gain);
-    gain.connect(sequencerMasterGain);
-    gain.gain.setValueAtTime(0.4, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1);
-    noise.start();
-    noise.stop(audioContext.currentTime + 0.1);
-}
-
-const soundPlayer: Record<Instrument, () => void> = {
-    'Kick': createKick,
-    'Snare': createSnare,
-    'Hi-hat (Closed)': () => createHihat(false),
-    'Hi-hat (Open)': () => createHihat(true),
-    'Clap': createClap,
-    'Tom': createTom,
-    'Rimshot': createRimshot,
-    'Cowbell': createCowbell,
-    'Cymbal': createCymbal,
-    'Shaker': createShaker,
-};
-
-
-// --- UI Components ---
-
-interface SequencerGridProps {
-    grid: GridState;
-    currentStep: number | null;
-    isPlaying: boolean;
-    toggleStep: (track: number, step: number) => void;
-}
-const SequencerGrid: React.FC<SequencerGridProps> = ({ grid, currentStep, isPlaying, toggleStep }) => (
-    <div className="flex-1 grid gap-1 p-2 bg-gray-900 rounded-lg shadow-inner overflow-x-auto">
-        {grid.map((track, trackIndex) => (
-            <div key={trackIndex} className="grid gap-1" style={{gridTemplateColumns: `repeat(${NUM_STEPS}, minmax(0, 1fr))`, minWidth: `${NUM_STEPS * 2}rem`}}>
-                {track.map((step, stepIndex) => {
-                    const isActive = step;
-                    const isCurrent = currentStep === stepIndex;
-                    const isFourth = (stepIndex + 1) % 4 === 0;
-
-                    return (
-                        <button
-                            key={stepIndex}
-                            onClick={() => toggleStep(trackIndex, stepIndex)}
-                            className={`w-full aspect-square rounded-md transition-all duration-100 ease-in-out transform
-                ${isActive ? 'bg-cyan-400 shadow-cyan-400/50 shadow-lg scale-105' : isFourth ? 'bg-gray-700' : 'bg-gray-800'}
-                ${isCurrent && isPlaying ? 'ring-2 ring-white' : ''}
-                hover:bg-cyan-300`}
-                        />
-                    );
-                })}
-            </div>
-        ))}
-    </div>
-);
-
-interface TrackControlsProps {
-    clearTrack: (trackIndex: number) => void;
-}
-const TrackControls: React.FC<TrackControlsProps> = ({ clearTrack }) => (
-    <div className="grid gap-1 p-2 pr-4 bg-gray-900">
-        {INSTRUMENTS.map((instrument, index) => (
-            <div key={instrument} className="h-full flex items-center justify-between text-sm text-gray-300">
-                <span className="w-32 truncate">{instrument}</span>
-                <button onClick={() => clearTrack(index)} className="text-gray-500 hover:text-red-500 text-xs">clear</button>
-            </div>
-        ))}
-    </div>
-);
-
-interface PianoKeyboardProps {
-    playPianoNote: (frequency: number) => void;
-}
-const PianoKeyboard: React.FC<PianoKeyboardProps> = ({ playPianoNote }) => {
-    const [pressedKeys, setPressedKeys] = useState<Set<string>>(new Set());
-
-    useEffect(() => {
-        const keyMap = new Map(PIANO_NOTES.map(n => [n.key, n]));
-
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.repeat || pressedKeys.has(e.key)) return;
-            const note = keyMap.get(e.key.toLowerCase());
-            if (note) {
-                playPianoNote(note.freq);
-                setPressedKeys(prev => new Set(prev).add(e.key));
-            }
-        };
-        const handleKeyUp = (e: KeyboardEvent) => {
-             setPressedKeys(prev => {
-                const newSet = new Set(prev);
-                newSet.delete(e.key);
-                return newSet;
-             });
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        window.addEventListener('keyup', handleKeyUp);
-        return () => {
-            window.removeEventListener('keydown', handleKeyDown);
-            window.removeEventListener('keyup', handleKeyUp);
-        };
-    }, [playPianoNote, pressedKeys]);
-    
-    const whiteKeys = PIANO_NOTES.filter(n => n.type === 'white');
-    const blackKeys = PIANO_NOTES.filter(n => n.type === 'black');
-
-    return (
-        <div className="relative w-full h-48" style={{ userSelect: 'none' }}>
-            {/* White Keys */}
-            <div className="absolute top-0 left-0 w-full h-full flex">
-                {whiteKeys.map(note => (
-                    <div key={note.note}
-                         onMouseDown={() => playPianoNote(note.freq)}
-                         className={`flex-1 h-full border-2 border-gray-900 rounded-b-md cursor-pointer transition-colors ${pressedKeys.has(note.key) ? 'bg-cyan-300' : 'bg-white'}`}>
-                    </div>
-                ))}
-            </div>
-             {/* Black Keys */}
-            <div className="absolute top-0 left-0 w-full h-2/3 flex pointer-events-none">
-                <div className="flex-1"></div>
-                {blackKeys.map((note, index) => {
-                    const isLastInGroup = note.note.includes('D#') || note.note.includes('A#');
-                    return (
-                       <div key={note.note} className="flex-1 flex justify-center" style={{marginLeft: '-3%', marginRight: '-3%'}}>
-                         <div onMouseDown={(e) => { e.stopPropagation(); playPianoNote(note.freq); }}
-                            className={`w-3/5 h-full bg-gray-800 border-2 border-gray-900 rounded-b-md cursor-pointer pointer-events-auto transition-colors ${pressedKeys.has(note.key) ? 'bg-cyan-500' : 'bg-gray-800'}`}
-                            style={{marginRight: isLastInGroup ? '12.5%' : '0' }}>
-                         </div>
-                       </div>
-                    );
-                })}
-                 <div className="flex-1"></div>
-            </div>
-        </div>
-    );
-};
-
-interface NavButtonProps {
-    targetView: View;
-    icon: React.ReactNode;
-    label: string;
-    currentView: View;
-    setView: (view: View) => void;
-}
-const NavButton: React.FC<NavButtonProps> = ({ targetView, icon, label, currentView, setView }) => (
-    <button onClick={() => setView(targetView)} className={`flex flex-col sm:flex-row items-center gap-2 px-3 py-2 text-sm font-medium rounded-md transition-colors ${currentView === targetView ? 'bg-cyan-500 text-white' : 'text-gray-300 hover:bg-gray-700'}`}>
-        {icon}
-        <span className="hidden sm:inline">{label}</span>
-    </button>
-);
-
-
 // --- Main Application ---
+
+type MixerChannel = {
+    gain: GainNode;
+    pan: StereoPannerNode;
+    bass: BiquadFilterNode;
+    mid: BiquadFilterNode;
+    reverbSend: GainNode;
+};
 
 export default function App() {
     const [view, setView] = useState<View>('sequencer');
-    const [grid, setGrid] = useState<GridState>(() => Array.from({ length: NUM_TRACKS }, () => Array(NUM_STEPS).fill(false)));
+    const [grid, setGrid] = useState<GridState>(() => Array.from({ length: NUM_TRACKS }, () => Array(NUM_STEPS).fill(0)));
     const [isPlaying, setIsPlaying] = useState(false);
     const [tempo, setTempo] = useState(120);
     const [currentStep, setCurrentStep] = useState<number | null>(null);
@@ -420,16 +75,6 @@ export default function App() {
     const [isGenerating, setIsGenerating] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResult, setSearchResult] = useState<{ text: string; groundingChunks: GroundingChunk[] } | null>(null);
-    const [ttsText, setTtsText] = useState('');
-    const [generatedAudio, setGeneratedAudio] = useState<string | null>(null);
-    const [uploadedImage, setUploadedImage] = useState<{ file: File, url: string, base64: string } | null>(null);
-    const [imageEditPrompt, setImageEditPrompt] = useState('');
-    const [editedImage, setEditedImage] = useState<string | null>(null);
-    const [veoPrompt, setVeoPrompt] = useState('');
-    const [generatedVideo, setGeneratedVideo] = useState<string | null>(null);
-    const [veoAspectRatio, setVeoAspectRatio] = useState<'16:9' | '9:16'>('16:9');
-    const [hasSelectedApiKey, setHasSelectedApiKey] = useState(false);
-    const [veoLoadingMessage, setVeoLoadingMessage] = useState("");
 
     // Live API states
     const [isLiveConnected, setIsLiveConnected] = useState(false);
@@ -445,25 +90,374 @@ export default function App() {
     const [isRecording, setIsRecording] = useState(false);
     const [recordings, setRecordings] = useState<Recording[]>([]);
     const [micFx, setMicFx] = useState({ distortion: 0, delayTime: 0, delayFeedback: 0, reverb: 0 });
+    const [pianoInstrument, setPianoInstrument] = useState<Instrument>('Pianos');
     const audioFxNodes = useRef<any>({});
     const mediaRecorder = useRef<MediaRecorder | null>(null);
     const mediaStreamDestination = useRef<MediaStreamAudioDestinationNode | null>(null);
-    const pianoMasterGain = useRef<GainNode | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const animationFrameRef = useRef<number>();
+    
+    // Mixer State
+    const initialMixerSettings: AllMixerSettings = useMemo(() => INSTRUMENTS.reduce((acc, inst) => {
+        acc[inst] = { volume: 0.8, pan: 0, eq: { bass: 0, mid: 0 }, sustain: 0.2, reverb: 0 };
+        return acc;
+    }, {} as AllMixerSettings), []);
+    const [mixerSettings, setMixerSettings] = useState<AllMixerSettings>(initialMixerSettings);
+    const mixerChannels = useRef<Record<Instrument, MixerChannel>>({} as Record<Instrument, MixerChannel>);
+    const mixerSettingsRef = useRef(mixerSettings);
+    const masterReverb = useRef<ConvolverNode | null>(null);
 
-    // Setup piano master gain node
+
     useEffect(() => {
-        const pmg = audioContext.createGain();
-        pmg.connect(audioContext.destination);
-        pianoMasterGain.current = pmg;
+        mixerSettingsRef.current = mixerSettings;
+    }, [mixerSettings]);
+    
+    // Initialize Mixer Audio Nodes
+    useEffect(() => {
+        // Create a single master reverb effect if it doesn't exist
+        if (!masterReverb.current) {
+            const reverb = audioContext.createConvolver();
+            reverb.buffer = createReverbImpulseResponse(); // Reuse this function
+            reverb.connect(sequencerMasterGain);
+            masterReverb.current = reverb;
+        }
+
+        INSTRUMENTS.forEach(inst => {
+            const gain = audioContext.createGain();
+            const pan = audioContext.createStereoPanner();
+            const reverbSend = audioContext.createGain();
+            reverbSend.gain.value = 0; // Start with no reverb
+            
+            const bass = audioContext.createBiquadFilter();
+            bass.type = 'lowshelf';
+            bass.frequency.value = 250;
+
+            const mid = audioContext.createBiquadFilter();
+            mid.type = 'peaking';
+            mid.frequency.value = 1000;
+            mid.Q.value = 1;
+
+            // Post-fader send routing:
+            // Signal chain: bass -> mid -> pan -> gain (main volume)
+            bass.connect(mid).connect(pan).connect(gain);
+            
+            // From the main gain, split the signal
+            // Dry path: gain -> master out
+            gain.connect(sequencerMasterGain);
+            
+            // Wet (reverb) path: gain -> reverbSend -> masterReverb
+            gain.connect(reverbSend).connect(masterReverb.current!);
+
+
+            mixerChannels.current[inst] = { gain, pan, bass, mid, reverbSend };
+        });
     }, []);
 
+    // Update mixer nodes when settings change
+    useEffect(() => {
+        const now = audioContext.currentTime;
+        INSTRUMENTS.forEach(inst => {
+            const settings = mixerSettings[inst];
+            const channel = mixerChannels.current[inst];
+            if (channel) {
+                channel.gain.gain.setValueAtTime(settings.volume, now);
+                channel.pan.pan.setValueAtTime(settings.pan, now);
+                channel.bass.gain.setValueAtTime(settings.eq.bass, now);
+                channel.mid.gain.setValueAtTime(settings.eq.mid, now);
+                channel.reverbSend.gain.setValueAtTime(settings.reverb, now);
+            }
+        });
+    }, [mixerSettings]);
 
-    const toggleStep = useCallback((track: number, step: number) => {
+
+    const soundPlayer: Record<Instrument, (pitch: number) => void> = useMemo(() => {
+        const createSound = (instrument: Instrument, setup: (now: number, pitch: number, channelInput: AudioNode, sustain: number) => void) => (pitch: number) => {
+            const now = audioContext.currentTime;
+            const channelInput = mixerChannels.current[instrument].bass;
+            const sustain = mixerSettingsRef.current[instrument].sustain;
+            if (channelInput) {
+                setup(now, pitch, channelInput, sustain);
+            }
+        };
+
+        return {
+            'Kick': createSound('Kick', (now, pitch, dest, sustain) => {
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                const duration = Math.max(0.05, (0.05 + sustain * 0.4) / pitch);
+                osc.frequency.setValueAtTime(150 * pitch, now);
+                osc.frequency.exponentialRampToValueAtTime(0.01, now + duration);
+                gain.gain.setValueAtTime(1, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+                osc.connect(gain).connect(dest);
+                osc.start(now);
+                osc.stop(now + duration);
+            }),
+            'Snare': createSound('Snare', (now, pitch, dest, sustain) => {
+                const noise = audioContext.createBufferSource();
+                const buffer = audioContext.createBuffer(1, audioContext.sampleRate, audioContext.sampleRate);
+                const output = buffer.getChannelData(0);
+                for (let i = 0; i < audioContext.sampleRate; i++) output[i] = Math.random() * 2 - 1;
+                noise.buffer = buffer;
+                noise.playbackRate.value = pitch;
+                const noiseFilter = audioContext.createBiquadFilter();
+                noiseFilter.type = 'highpass';
+                noiseFilter.frequency.value = 1000 * pitch;
+                const noiseEnvelope = audioContext.createGain();
+                const duration = Math.max(0.05, (0.05 + sustain * 0.3) / pitch);
+                noiseEnvelope.gain.setValueAtTime(1, now);
+                noiseEnvelope.gain.exponentialRampToValueAtTime(0.01, now + duration);
+                noise.connect(noiseFilter).connect(noiseEnvelope).connect(dest);
+                noise.start(now);
+                noise.stop(now + duration);
+            }),
+             'Hi-hat (Closed)': createSound('Hi-hat (Closed)', (now, pitch, dest, sustain) => createHihat(false, pitch, dest, sustain)),
+             'Hi-hat (Open)': createSound('Hi-hat (Open)', (now, pitch, dest, sustain) => createHihat(true, pitch, dest, sustain)),
+             'Clap': createSound('Clap', (now, pitch, dest, sustain) => {
+                const noise = audioContext.createBufferSource();
+                const buffer = audioContext.createBuffer(1, audioContext.sampleRate, audioContext.sampleRate);
+                const output = buffer.getChannelData(0);
+                for (let i = 0; i < audioContext.sampleRate; i++) output[i] = Math.random() * 2 - 1;
+                noise.buffer = buffer;
+                noise.playbackRate.value = pitch;
+                const bandpass = audioContext.createBiquadFilter();
+                bandpass.type = 'bandpass';
+                bandpass.frequency.value = 2500 * pitch;
+                bandpass.Q.value = 1.0;
+                const envelope = audioContext.createGain();
+                const duration = 0.05 + sustain * 0.2;
+                envelope.gain.setValueAtTime(0, now);
+                envelope.gain.linearRampToValueAtTime(0.8, now + 0.005 / pitch);
+                envelope.gain.linearRampToValueAtTime(0, now + 0.01 / pitch);
+                envelope.gain.linearRampToValueAtTime(0.8, now + 0.015 / pitch);
+                envelope.gain.linearRampToValueAtTime(0, now + 0.02 / pitch);
+                envelope.gain.linearRampToValueAtTime(0.6, now + 0.025 / pitch);
+                envelope.gain.exponentialRampToValueAtTime(0.01, now + duration / pitch);
+                noise.connect(bandpass).connect(envelope).connect(dest);
+                noise.start(now);
+                noise.stop(now + (duration + 0.05) / pitch);
+            }),
+            'Tom': createSound('Tom', (now, pitch, dest, sustain) => {
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                const duration = Math.max(0.08, (0.1 + sustain * 0.4) / pitch);
+                osc.frequency.setValueAtTime(300 * pitch, now);
+                osc.frequency.exponentialRampToValueAtTime(100 * pitch, now + duration);
+                gain.gain.setValueAtTime(0.8, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+                osc.connect(gain).connect(dest);
+                osc.start(now);
+                osc.stop(now + duration);
+            }),
+            'Rimshot': createSound('Rimshot', (now, pitch, dest, sustain) => {
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                const duration = (0.03 + sustain * 0.05) / pitch;
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(1000 * pitch, now);
+                osc.frequency.exponentialRampToValueAtTime(400 * pitch, now + duration);
+                gain.gain.setValueAtTime(0.5, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+                osc.connect(gain).connect(dest);
+                osc.start(now);
+                osc.stop(now + duration);
+            }),
+            'Cowbell': createSound('Cowbell', (now, pitch, dest, sustain) => {
+                const osc1 = audioContext.createOscillator();
+                const osc2 = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                const duration = (0.05 + sustain * 0.4) / pitch;
+                osc1.type = 'square';
+                osc2.type = 'square';
+                osc1.frequency.value = 540 * pitch;
+                osc2.frequency.value = 810 * pitch;
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+                osc1.connect(gain);
+                osc2.connect(gain);
+                gain.connect(dest);
+                osc1.start(now);
+                osc2.start(now);
+                osc1.stop(now + duration);
+                osc2.stop(now + duration);
+            }),
+            'Cymbal': createSound('Cymbal', (now, pitch, dest, sustain) => {
+                const noise = audioContext.createBufferSource();
+                const buffer = audioContext.createBuffer(1, audioContext.sampleRate * 2, audioContext.sampleRate);
+                const output = buffer.getChannelData(0);
+                for (let i = 0; i < audioContext.sampleRate * 2; i++) output[i] = Math.random() * 2 - 1;
+                noise.buffer = buffer;
+                noise.playbackRate.value = pitch;
+                const bandpass = audioContext.createBiquadFilter();
+                bandpass.type = 'bandpass';
+                bandpass.frequency.value = 12000 * pitch;
+                bandpass.Q.value = 0.5;
+                const highpass = audioContext.createBiquadFilter();
+                highpass.type = "highpass";
+                highpass.frequency.value = 5000 * pitch;
+                const gain = audioContext.createGain();
+                const duration = (0.2 + sustain * 2.5) / pitch;
+                gain.gain.setValueAtTime(0.5, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+                noise.connect(bandpass).connect(highpass).connect(gain).connect(dest);
+                noise.start(now);
+                noise.stop(now + duration);
+            }),
+            'Shaker': createSound('Shaker', (now, pitch, dest, sustain) => {
+                const noise = audioContext.createBufferSource();
+                const buffer = audioContext.createBuffer(1, audioContext.sampleRate, audioContext.sampleRate);
+                const output = buffer.getChannelData(0);
+                for (let i = 0; i < audioContext.sampleRate; i++) output[i] = Math.random() * 2 - 1;
+                noise.buffer = buffer;
+                noise.playbackRate.value = pitch;
+                const bandpass = audioContext.createBiquadFilter();
+                bandpass.type = 'bandpass';
+                bandpass.frequency.value = 8000 * pitch;
+                bandpass.Q.value = 2;
+                const gain = audioContext.createGain();
+                const duration = (0.05 + sustain * 0.1) / pitch;
+                gain.gain.setValueAtTime(0.4, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+                noise.connect(bandpass).connect(gain).connect(dest);
+                noise.start(now);
+                noise.stop(now + duration);
+            }),
+            '808': createSound('808', (now, pitch, dest, sustain) => {
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                const duration = (0.1 + sustain * 4) / pitch;
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(120 * pitch, now);
+                osc.frequency.exponentialRampToValueAtTime(30 * pitch, now + 0.1);
+                gain.gain.setValueAtTime(1, now);
+                gain.gain.linearRampToValueAtTime(1, now + 0.01);
+                gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+                osc.connect(gain).connect(dest);
+                osc.start(now);
+                osc.stop(now + duration);
+            }),
+            'Congas': createSound('Congas', (now, pitch, dest, sustain) => {
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                const duration = (0.1 + sustain * 0.5) / pitch;
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(440 * pitch, now);
+                osc.frequency.exponentialRampToValueAtTime(220 * pitch, now + duration);
+                gain.gain.setValueAtTime(1, now);
+                gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+                osc.connect(gain).connect(dest);
+                osc.start(now);
+                osc.stop(now + duration);
+            }),
+            'Violin': createSound('Violin', (now, pitch, dest, sustain) => {
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                const lfo = audioContext.createOscillator();
+                const vibrato = audioContext.createGain();
+                const baseFreq = 261.63; // C4
+                const duration = (0.2 + sustain * 1.8) / pitch;
+                osc.type = 'sawtooth';
+                osc.frequency.value = baseFreq * pitch;
+                lfo.frequency.value = 5;
+                vibrato.gain.value = 4;
+                lfo.connect(vibrato);
+                vibrato.connect(osc.detune);
+                gain.gain.setValueAtTime(0, now);
+                gain.gain.linearRampToValueAtTime(0.5, now + 0.1 / pitch);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+                osc.connect(gain).connect(dest);
+                lfo.start(now);
+                osc.start(now);
+                lfo.stop(now + duration);
+                osc.stop(now + duration);
+            }),
+            'Trumpet': createSound('Trumpet', (now, pitch, dest, sustain) => {
+                const osc = audioContext.createOscillator();
+                const gain = audioContext.createGain();
+                const filter = audioContext.createBiquadFilter();
+                const baseFreq = 261.63; // C4
+                const duration = (0.1 + sustain * 0.8) / pitch;
+                osc.type = 'sawtooth';
+                osc.frequency.value = baseFreq * pitch;
+                filter.type = 'lowpass';
+                filter.frequency.value = 1500 * pitch;
+                filter.Q.value = 5;
+                gain.gain.setValueAtTime(0, now);
+                gain.gain.linearRampToValueAtTime(0.8, now + 0.05 / pitch);
+                gain.gain.exponentialRampToValueAtTime(0.1, now + 0.2 / pitch);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+                osc.connect(filter).connect(gain).connect(dest);
+                osc.start(now);
+                osc.stop(now + duration);
+            }),
+            'Pianos': createSound('Pianos', (now, pitch, dest, sustain) => {
+                const baseFreq = 261.63 * pitch; // C4
+                const createPart = (freqMultiplier: number, gainValue: number, decay: number) => {
+                    const osc = audioContext.createOscillator();
+                    const gain = audioContext.createGain();
+                    const finalDecay = (decay * (0.2 + sustain * 2.5)) / pitch;
+                    osc.type = 'sine';
+                    osc.frequency.value = baseFreq * freqMultiplier;
+                    gain.gain.setValueAtTime(gainValue, now);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + finalDecay);
+                    osc.connect(gain).connect(dest);
+                    osc.start(now);
+                    osc.stop(now + finalDecay + 0.1);
+                };
+                createPart(1, 0.4, 2.0);
+                createPart(2, 0.2, 1.5);
+                createPart(3, 0.1, 1.0);
+            }),
+            'High Pitch Piano': createSound('High Pitch Piano', (now, pitch, dest, sustain) => {
+                const baseFreq = 523.25 * pitch; // C5 (one octave higher)
+                const createPart = (freqMultiplier: number, gainValue: number, decay: number) => {
+                    const osc = audioContext.createOscillator();
+                    const gain = audioContext.createGain();
+                    const finalDecay = (decay * (0.2 + sustain * 2.5)) / pitch;
+                    osc.type = 'sine';
+                    osc.frequency.value = baseFreq * freqMultiplier;
+                    gain.gain.setValueAtTime(gainValue, now);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, now + finalDecay);
+                    osc.connect(gain).connect(dest);
+                    osc.start(now);
+                    osc.stop(now + finalDecay + 0.1);
+                };
+                createPart(1, 0.4, 2.0);
+                createPart(2, 0.2, 1.5);
+                createPart(3, 0.1, 1.0);
+            }),
+        };
+    }, []);
+
+    const createHihat = (isOpen: boolean, pitch: number, dest: AudioNode, sustain: number) => {
+        const now = audioContext.currentTime;
+        const noise = audioContext.createBufferSource();
+        const buffer = audioContext.createBuffer(1, audioContext.sampleRate, audioContext.sampleRate);
+        const output = buffer.getChannelData(0);
+        for (let i = 0; i < audioContext.sampleRate; i++) output[i] = Math.random() * 2 - 1;
+        noise.buffer = buffer;
+        noise.playbackRate.value = pitch;
+        const bandpass = audioContext.createBiquadFilter();
+        bandpass.type = 'bandpass';
+        bandpass.frequency.value = 10000 * pitch;
+        bandpass.Q.value = 1.5;
+        const highpass = audioContext.createBiquadFilter();
+        highpass.type = "highpass";
+        highpass.frequency.value = 7000 * pitch;
+        const gain = audioContext.createGain();
+        const duration = (isOpen ? (0.1 + sustain * 0.8) : (0.02 + sustain * 0.08)) / pitch;
+        gain.gain.setValueAtTime(1, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
+        noise.connect(bandpass).connect(highpass).connect(gain).connect(dest);
+        noise.start(now);
+        noise.stop(now + duration);
+    };
+
+    const cycleStepPitch = useCallback((track: number, step: number) => {
         setGrid(prevGrid => {
             const newGrid = prevGrid.map(t => [...t]);
-            newGrid[track][step] = !newGrid[track][step];
+            const currentPitch = newGrid[track][step];
+            newGrid[track][step] = (currentPitch + 1) % 10; // Cycles 0-9
             return newGrid;
         });
     }, []);
@@ -471,13 +465,13 @@ export default function App() {
     const clearTrack = (trackIndex: number) => {
         setGrid(prevGrid => {
             const newGrid = prevGrid.map(t => [...t]);
-            newGrid[trackIndex] = Array(NUM_STEPS).fill(false);
+            newGrid[trackIndex] = Array(NUM_STEPS).fill(0);
             return newGrid;
         });
     }
     
     const clearAll = useCallback(() => {
-        setGrid(Array.from({ length: NUM_TRACKS }, () => Array(NUM_STEPS).fill(false)));
+        setGrid(Array.from({ length: NUM_TRACKS }, () => Array(NUM_STEPS).fill(0)));
     }, []);
 
     const setSteps = useCallback((trackName: string, steps: number[]) => {
@@ -486,17 +480,16 @@ export default function App() {
         
         setGrid(prevGrid => {
             const newGrid = prevGrid.map(t => [...t]);
-            const newTrack = Array(NUM_STEPS).fill(false);
+            const newTrack = Array(NUM_STEPS).fill(0);
             steps.forEach(step => {
                 if(step >= 1 && step <= NUM_STEPS) {
-                    newTrack[step-1] = true;
+                    newTrack[step-1] = 5; // Set to a default middle pitch (5)
                 }
             });
             newGrid[trackIndex] = newTrack;
             return newGrid;
         });
     }, []);
-
 
     const handlePlay = useCallback(() => {
         if (isPlaying) return;
@@ -514,6 +507,14 @@ export default function App() {
         setCurrentStep(null);
     }, [isPlaying]);
 
+    const mapPitchValue = (value: number) => {
+        if (value <= 0) return 1.0;
+        const minPitch = 0.5;
+        const maxPitch = 2.0;
+        // Maps pitch value 1-9 to range 0.5-2.0
+        return minPitch + ((value - 1) / 8) * (maxPitch - minPitch);
+    };
+
     useEffect(() => {
         if (isPlaying) {
             const interval = 60000 / tempo / 4; // 16th notes
@@ -521,8 +522,10 @@ export default function App() {
                 setCurrentStep(prev => {
                     const nextStep = (prev === null ? 0 : prev + 1) % NUM_STEPS;
                     grid.forEach((track, trackIndex) => {
-                        if (track[nextStep]) {
-                            soundPlayer[INSTRUMENTS[trackIndex]]();
+                        const pitchValue = track[nextStep];
+                        if (pitchValue > 0) {
+                            const pitch = mapPitchValue(pitchValue);
+                            soundPlayer[INSTRUMENTS[trackIndex]](pitch);
                         }
                     });
                     return nextStep;
@@ -534,7 +537,7 @@ export default function App() {
         return () => {
             if (timerRef.current) clearInterval(timerRef.current);
         };
-    }, [isPlaying, tempo, grid]);
+    }, [isPlaying, tempo, grid, soundPlayer]);
 
     // --- Gemini Feature Handlers ---
 
@@ -546,7 +549,8 @@ export default function App() {
             if (pattern) {
                 const newGrid = INSTRUMENTS.map(instrument => {
                     const trackPattern = pattern[instrument as Instrument];
-                    return trackPattern ? trackPattern.map(step => step === 1) : Array(NUM_STEPS).fill(false);
+                    // Convert AI's 0/1 to 0/5 (default middle pitch)
+                    return trackPattern ? trackPattern.map(step => step === 1 ? 5 : 0) : Array(NUM_STEPS).fill(0);
                 });
                 setGrid(newGrid);
             }
@@ -567,96 +571,6 @@ export default function App() {
         }
     };
 
-    const handleGenerateSpeech = async () => {
-        if (!ttsText) return;
-        setIsGenerating(true);
-        setGeneratedAudio(null);
-        try {
-            const audioB64 = await geminiService.generateSpeech(ttsText);
-            if (audioB64) {
-                setGeneratedAudio(`data:audio/wav;base64,${audioB64}`);
-            }
-        } finally {
-            setIsGenerating(false);
-        }
-    };
-    
-    const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
-            const url = URL.createObjectURL(file);
-            blobToBase64(file).then(base64 => {
-                setUploadedImage({ file, url, base64 });
-                setEditedImage(null);
-                setGeneratedVideo(null);
-            });
-        }
-    };
-
-    const handleEditImage = async () => {
-        if (!uploadedImage || !imageEditPrompt) return;
-        setIsGenerating(true);
-        setEditedImage(null);
-        try {
-            const result = await geminiService.editImage(imageEditPrompt, uploadedImage.base64, uploadedImage.file.type);
-            if (result) {
-                setEditedImage(`data:${uploadedImage.file.type};base64,${result}`);
-            }
-        } finally {
-            setIsGenerating(false);
-        }
-    };
-    
-    const checkApiKey = async () => {
-        if (window.aistudio && await window.aistudio.hasSelectedApiKey()) {
-            setHasSelectedApiKey(true);
-        } else {
-            setHasSelectedApiKey(false);
-        }
-    };
-
-    useEffect(() => {
-        checkApiKey();
-    }, []);
-    
-    const handleAnimate = async () => {
-        if (!uploadedImage || !veoPrompt) return;
-        
-        if (!hasSelectedApiKey) {
-            await window.aistudio.openSelectKey();
-            // Assume key selection is successful to proceed.
-            setHasSelectedApiKey(true);
-        }
-
-        setIsGenerating(true);
-        setGeneratedVideo(null);
-        let messageInterval: number | undefined;
-
-        try {
-            let messageIndex = 0;
-            setVeoLoadingMessage(VEO_LOADING_MESSAGES[messageIndex]);
-            messageInterval = window.setInterval(() => {
-                messageIndex = (messageIndex + 1) % VEO_LOADING_MESSAGES.length;
-                setVeoLoadingMessage(VEO_LOADING_MESSAGES[messageIndex]);
-            }, 5000);
-            
-            const resultUrl = await geminiService.animateImage(veoPrompt, uploadedImage.base64, uploadedImage.file.type, veoAspectRatio);
-            setGeneratedVideo(resultUrl);
-        } catch (error: any) {
-            console.error("Error animating image:", error);
-            if (error.message?.includes("Requested entity was not found")) {
-                setHasSelectedApiKey(false);
-                alert("API Key not found or invalid. Please select your API key again.");
-            } else {
-                 alert(`An error occurred: ${error.message}`);
-            }
-        } finally {
-            setIsGenerating(false);
-            if(messageInterval) clearInterval(messageInterval);
-            setVeoLoadingMessage("");
-        }
-    };
-    
     const startLiveSession = async () => {
         if (isLiveConnected) return;
         try {
@@ -821,22 +735,14 @@ export default function App() {
 
     // --- Piano Handler ---
     const playPianoNote = useCallback((frequency: number) => {
-        if (!pianoMasterGain.current) return;
-        const osc = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        osc.type = 'triangle';
-        osc.frequency.setValueAtTime(frequency, audioContext.currentTime);
-        
-        gain.gain.setValueAtTime(0, audioContext.currentTime);
-        gain.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.01); // Quick attack
-        gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.5); // Decay
-
-        osc.connect(gain);
-        gain.connect(pianoMasterGain.current);
-
-        osc.start(audioContext.currentTime);
-        osc.stop(audioContext.currentTime + 0.5);
-    }, []);
+        const soundGenerator = soundPlayer[pianoInstrument];
+        if (soundGenerator) {
+            // Use C4 (261.63 Hz) as the base frequency for a pitch of 1.0
+            const baseFrequency = 261.63;
+            const pitch = frequency / baseFrequency;
+            soundGenerator(pitch);
+        }
+    }, [pianoInstrument, soundPlayer]);
 
     // --- Mic & Recording Handlers ---
     const startMic = async () => {
@@ -900,9 +806,6 @@ export default function App() {
 
         // Connect all active sound sources to the recording destination
         sequencerMasterGain.connect(dest);
-        if (pianoMasterGain.current) {
-            pianoMasterGain.current.connect(dest);
-        }
         if (micStream && audioFxNodes.current.analyser) {
             audioFxNodes.current.analyser.connect(dest);
         }
@@ -919,9 +822,6 @@ export default function App() {
             const destNode = mediaStreamDestination.current;
             if (destNode) {
                 sequencerMasterGain.disconnect(destNode);
-                if (pianoMasterGain.current) {
-                    pianoMasterGain.current.disconnect(destNode);
-                }
                 if (micStream && audioFxNodes.current.analyser) {
                      audioFxNodes.current.analyser.disconnect(destNode);
                 }
@@ -1016,6 +916,20 @@ export default function App() {
         }
     }, [micStream]);
     
+    const handleMixerChange = (instrument: Instrument, key: 'volume' | 'pan' | 'sustain' | 'reverb', value: number) => {
+        setMixerSettings(prev => ({
+            ...prev,
+            [instrument]: { ...prev[instrument], [key]: value }
+        }));
+    };
+    
+    const handleEqChange = (instrument: Instrument, band: 'bass' | 'mid', value: number) => {
+        setMixerSettings(prev => ({
+            ...prev,
+            [instrument]: { ...prev[instrument], eq: { ...prev[instrument].eq, [band]: value } }
+        }));
+    };
+
     // --- Components ---
 
     const renderView = () => {
@@ -1026,8 +940,23 @@ export default function App() {
              case 'piano':
                 return (
                     <div className="space-y-4">
-                        <h2 className="text-2xl font-bold text-cyan-300 text-center">Virtual Piano</h2>
-                        <p className="text-gray-400 text-center">Click or use your keyboard to play (Keys: A, W, S, E, D...)</p>
+                        <div className="text-center">
+                            <h2 className="text-2xl font-bold text-cyan-300">Virtual Piano</h2>
+                            <p className="text-gray-400">Click or use your keyboard to play (Keys: A, W, S, E, D...)</p>
+                        </div>
+                        <div className="flex justify-center items-center gap-3">
+                            <label htmlFor="piano-instrument" className="font-bold">Instrument:</label>
+                             <select
+                                id="piano-instrument"
+                                value={pianoInstrument}
+                                onChange={(e) => setPianoInstrument(e.target.value as Instrument)}
+                                className="bg-gray-700 border border-gray-600 rounded-lg p-2 focus:ring-2 focus:ring-cyan-400 focus:outline-none"
+                            >
+                                {INSTRUMENTS.map(inst => (
+                                    <option key={inst} value={inst}>{inst}</option>
+                                ))}
+                            </select>
+                        </div>
                         <div className="p-4 bg-gray-900 rounded-lg">
                            <PianoKeyboard playPianoNote={playPianoNote} />
                         </div>
@@ -1037,7 +966,7 @@ export default function App() {
                 return (
                     <div className="space-y-6">
                          <h2 className="text-2xl font-bold text-cyan-300">FX & Recording Studio</h2>
-                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                             {/* Mic Controls */}
                             <div className="bg-gray-800 p-4 rounded-lg space-y-4">
                                 <h3 className="font-bold text-lg">Live Microphone</h3>
@@ -1087,41 +1016,6 @@ export default function App() {
                          </div>
                     </div>
                 );
-            case 'veo':
-                return (
-                    <div className="space-y-4">
-                        <h2 className="text-2xl font-bold text-cyan-300">Veo Video Animator</h2>
-                        <input type="file" accept="image/*" onChange={handleImageUpload} className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyan-50 file:text-cyan-700 hover:file:bg-cyan-100"/>
-                        {uploadedImage && <img src={uploadedImage.url} alt="Uploaded" className="max-w-xs mx-auto rounded-lg" />}
-                        <textarea value={veoPrompt} onChange={(e) => setVeoPrompt(e.target.value)} placeholder="Animation prompt, e.g., 'A subtle zoom in, with sparkling lights'" className={commonInputClass} rows={3}></textarea>
-                        <div className="flex gap-2 items-center text-white">
-                            <span>Aspect Ratio:</span>
-                            <button onClick={() => setVeoAspectRatio('16:9')} className={`px-3 py-1 rounded ${veoAspectRatio === '16:9' ? 'bg-cyan-500' : 'bg-gray-600'}`}>16:9</button>
-                            <button onClick={() => setVeoAspectRatio('9:16')} className={`px-3 py-1 rounded ${veoAspectRatio === '9:16' ? 'bg-cyan-500' : 'bg-gray-600'}`}>9:16</button>
-                        </div>
-                        <button onClick={handleAnimate} disabled={isGenerating || !uploadedImage || !veoPrompt} className={commonButtonClass}>
-                            {isGenerating ? 'Animating...' : 'Animate with Veo'}
-                        </button>
-                         {!hasSelectedApiKey && <button onClick={() => window.aistudio.openSelectKey()} className="text-cyan-400 underline mt-2">Select API Key</button>}
-                        {isGenerating && <p className="text-center text-cyan-300 animate-pulse">{veoLoadingMessage}</p>}
-                        {generatedVideo && <video src={generatedVideo} controls autoPlay loop className="w-full rounded-lg mt-4"></video>}
-                    </div>
-                );
-            case 'imageEditor':
-                 return (
-                    <div className="space-y-4">
-                        <h2 className="text-2xl font-bold text-cyan-300">Nano Banana Image Editor</h2>
-                        <input type="file" accept="image/*" onChange={handleImageUpload} className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cyan-50 file:text-cyan-700 hover:file:bg-cyan-100"/>
-                        <textarea value={imageEditPrompt} onChange={(e) => setImageEditPrompt(e.target.value)} placeholder="Edit prompt, e.g., 'Add a retro film grain effect'" className={commonInputClass} rows={2}></textarea>
-                        <button onClick={handleEditImage} disabled={isGenerating || !uploadedImage || !imageEditPrompt} className={commonButtonClass}>
-                            {isGenerating ? 'Editing...' : 'Edit Image'}
-                        </button>
-                        <div className="flex gap-4 justify-center">
-                            {uploadedImage && <div><h3 className="text-center text-gray-400 mb-2">Original</h3><img src={uploadedImage.url} alt="Uploaded" className="max-w-xs rounded-lg" /></div>}
-                            {editedImage && <div><h3 className="text-center text-gray-400 mb-2">Edited</h3><img src={editedImage} alt="Edited" className="max-w-xs rounded-lg" /></div>}
-                        </div>
-                    </div>
-                );
             case 'search':
                 return (
                     <div className="space-y-4">
@@ -1134,17 +1028,6 @@ export default function App() {
                         {searchResult && <div className="p-4 bg-gray-800 rounded-lg space-y-3 text-gray-300"><p className="whitespace-pre-wrap">{searchResult.text}</p>
                             {searchResult.groundingChunks.length > 0 && <div className="pt-2 border-t border-gray-700"><h4 className="font-bold text-sm">Sources:</h4><ul className="list-disc list-inside text-sm">{searchResult.groundingChunks.map((chunk, i) => chunk.web && <li key={i}><a href={chunk.web.uri} target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline">{chunk.web.title}</a></li>)}</ul></div>}
                         </div>}
-                    </div>
-                );
-            case 'tts':
-                 return (
-                    <div className="space-y-4">
-                        <h2 className="text-2xl font-bold text-cyan-300">TTS Vocal Sampler</h2>
-                        <textarea value={ttsText} onChange={e => setTtsText(e.target.value)} placeholder="Enter text to generate a vocal sample..." className={commonInputClass} rows={3}/>
-                        <button onClick={handleGenerateSpeech} disabled={isGenerating || !ttsText} className={commonButtonClass}>
-                            {isGenerating ? 'Generating...' : 'Generate Vocal'}
-                        </button>
-                        {generatedAudio && <audio src={generatedAudio} controls className="w-full mt-4"></audio>}
                     </div>
                 );
             case 'live':
@@ -1173,10 +1056,10 @@ export default function App() {
             case 'sequencer':
             default:
                 return (
-                    <>
+                    <div className="space-y-4">
                         <div className="flex flex-col md:flex-row gap-4">
                             <TrackControls clearTrack={clearTrack} />
-                            <SequencerGrid grid={grid} currentStep={currentStep} isPlaying={isPlaying} toggleStep={toggleStep} />
+                            <SequencerGrid grid={grid} currentStep={currentStep} isPlaying={isPlaying} cycleStepPitch={cycleStepPitch} />
                         </div>
                         <div className="bg-gray-800 p-4 rounded-b-lg space-y-4">
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-center">
@@ -1200,16 +1083,87 @@ export default function App() {
                                  </div>
                             </div>
                         </div>
-                    </>
+                        { /* Track Mixer */ }
+                         <div className="bg-gray-800 p-4 rounded-lg">
+                            <h3 className="font-bold text-lg mb-4">Track Mixer</h3>
+                            <div className="flex overflow-x-auto space-x-2 pb-4">
+                                {INSTRUMENTS.map(inst => (
+                                    <div key={inst} className="flex-shrink-0 w-40 bg-gray-900/50 p-3 rounded-lg flex flex-col items-center space-y-2">
+                                        <p className="font-bold text-sm truncate w-full text-center">{inst}</p>
+                                        <div className="flex-1 flex justify-center items-center gap-2">
+                                            { /* Volume */ }
+                                            <div className="flex flex-col items-center h-48">
+                                                <label className="text-xs text-gray-400">Vol</label>
+                                                <input type="range" min="0" max="1.5" step="0.01" value={mixerSettings[inst].volume} onChange={e => handleMixerChange(inst, 'volume', +e.target.value)} className="mixer-slider" style={{'--thumb-color': '#22d3ee'} as React.CSSProperties} />
+                                            </div>
+                                            { /* EQ */ }
+                                            <div className="flex flex-col items-center h-48">
+                                                <label className="text-xs text-gray-400">Bass</label>
+                                                <input type="range" min="-24" max="12" step="0.1" value={mixerSettings[inst].eq.bass} onChange={e => handleEqChange(inst, 'bass', +e.target.value)} className="mixer-slider" style={{'--thumb-color': '#67e8f9'} as React.CSSProperties} />
+                                            </div>
+                                            <div className="flex flex-col items-center h-48">
+                                                <label className="text-xs text-gray-400">Mid</label>
+                                                <input type="range" min="-24" max="12" step="0.1" value={mixerSettings[inst].eq.mid} onChange={e => handleEqChange(inst, 'mid', +e.target.value)} className="mixer-slider" style={{'--thumb-color': '#a5f3fc'} as React.CSSProperties} />
+                                            </div>
+                                            <div className="flex flex-col items-center h-48">
+                                                <label className="text-xs text-gray-400">Sustain</label>
+                                                <input type="range" min="0" max="1" step="0.01" value={mixerSettings[inst].sustain} onChange={e => handleMixerChange(inst, 'sustain', +e.target.value)} className="mixer-slider" style={{'--thumb-color': '#cffafe'} as React.CSSProperties} />
+                                            </div>
+                                             <div className="flex flex-col items-center h-48">
+                                                <label className="text-xs text-gray-400">Reverb</label>
+                                                <input type="range" min="0" max="1" step="0.01" value={mixerSettings[inst].reverb} onChange={e => handleMixerChange(inst, 'reverb', +e.target.value)} className="mixer-slider" style={{'--thumb-color': '#e0f2fe'} as React.CSSProperties} />
+                                            </div>
+                                        </div>
+                                        { /* Pan */ }
+                                         <div className="w-full">
+                                            <label className="text-xs text-gray-400">Pan</label>
+                                            <input type="range" min="-1" max="1" step="0.01" value={mixerSettings[inst].pan} onChange={e => handleMixerChange(inst, 'pan', +e.target.value)} className="w-full" />
+                                         </div>
+                                    </div>
+                                ))}
+                            </div>
+                         </div>
+                    </div>
                 );
         }
     };
 
     return (
         <div className="min-h-screen text-white p-2 sm:p-4 lg:p-8 flex flex-col items-center">
+             <style>{`
+                .mixer-slider {
+                    -webkit-appearance: none;
+                    appearance: none;
+                    width: 1rem;
+                    height: 100%;
+                    background: #374151; /* gray-700 */
+                    outline: none;
+                    border-radius: 8px;
+                    writing-mode: bt-lr; /* IE */
+                    -webkit-appearance: slider-vertical; /* WebKit */
+                }
+                .mixer-slider::-webkit-slider-thumb {
+                    -webkit-appearance: none;
+                    appearance: none;
+                    width: 24px;
+                    height: 24px;
+                    background: var(--thumb-color, #67e8f9); /* cyan-300 */
+                    cursor: pointer;
+                    border-radius: 50%;
+                    border: 2px solid #1f2937; /* gray-800 */
+                }
+                .mixer-slider::-moz-range-thumb {
+                    width: 24px;
+                    height: 24px;
+                    background: var(--thumb-color, #67e8f9); /* cyan-300 */
+                    cursor: pointer;
+                    border-radius: 50%;
+                    border: 2px solid #1f2937; /* gray-800 */
+                }
+            `}</style>
             <div className="w-full max-w-6xl">
                 <header className="text-center mb-4">
-                    <h1 className="text-4xl font-bold tracking-tighter text-cyan-300">Gemini Beat Machine Pro</h1>
+                    <h1 className="text-4xl font-bold tracking-tighter text-cyan-300">Ed Rock's Pro Beat Machine</h1>
                     <p className="text-gray-400">Craft rhythms with the power of AI</p>
                 </header>
                 <main className="bg-gray-800/50 backdrop-blur-sm rounded-lg shadow-2xl shadow-cyan-500/10 border border-gray-700">
@@ -1217,9 +1171,6 @@ export default function App() {
                         <NavButton currentView={view} setView={setView} targetView="sequencer" icon={<IconMusicNote className="w-5 h-5"/>} label="Sequencer" />
                         <NavButton currentView={view} setView={setView} targetView="piano" icon={<IconKeyboard className="w-5 h-5"/>} label="Piano" />
                         <NavButton currentView={view} setView={setView} targetView="fx" icon={<IconRecord className="w-5 h-5"/>} label="FX / Record" />
-                        <NavButton currentView={view} setView={setView} targetView="tts" icon={<IconSoundWave className="w-5 h-5"/>} label="TTS Sampler" />
-                        <NavButton currentView={view} setView={setView} targetView="veo" icon={<IconMovie className="w-5 h-5"/>} label="Veo Animator" />
-                        <NavButton currentView={view} setView={setView} targetView="imageEditor" icon={<IconImageEdit className="w-5 h-5"/>} label="Image Editor" />
                         <NavButton currentView={view} setView={setView} targetView="search" icon={<IconSearch className="w-5 h-5"/>} label="Search" />
                         <NavButton currentView={view} setView={setView} targetView="live" icon={<IconMic className="w-5 h-5"/>} label="Live Control" />
                     </nav>
@@ -1231,6 +1182,156 @@ export default function App() {
         </div>
     );
 }
+
+
+// --- UI Components ---
+
+interface SequencerGridProps {
+    grid: GridState;
+    currentStep: number | null;
+    isPlaying: boolean;
+    cycleStepPitch: (track: number, step: number) => void;
+}
+
+const pitchColorClasses = [
+    '', // 0 is off
+    'bg-cyan-900', // 1
+    'bg-cyan-800',
+    'bg-cyan-700',
+    'bg-cyan-600',
+    'bg-cyan-500', // 5 (middle)
+    'bg-cyan-400',
+    'bg-cyan-300',
+    'bg-cyan-200',
+    'bg-cyan-100', // 9
+];
+
+const SequencerGrid: React.FC<SequencerGridProps> = ({ grid, currentStep, isPlaying, cycleStepPitch }) => (
+    <div className="flex-1 grid gap-1 p-2 bg-gray-900 rounded-lg shadow-inner overflow-x-auto">
+        {grid.map((track, trackIndex) => (
+            <div key={trackIndex} className="grid gap-1" style={{gridTemplateColumns: `repeat(${NUM_STEPS}, minmax(0, 1fr))`, minWidth: `${NUM_STEPS * 2.5}rem`}}>
+                {track.map((pitchValue, stepIndex) => {
+                    const isActive = pitchValue > 0;
+                    const isCurrent = currentStep === stepIndex;
+                    const isFourth = (stepIndex + 1) % 4 === 0;
+                    
+                    const buttonClass = `
+                        w-full aspect-square rounded-md transition-all duration-100 ease-in-out transform flex items-center justify-center font-bold text-xs
+                        ${isActive ? `${pitchColorClasses[pitchValue]} text-black` : isFourth ? 'bg-gray-700' : 'bg-gray-800'}
+                        ${isCurrent && isPlaying ? 'ring-2 ring-white scale-105' : ''}
+                        hover:ring-2 hover:ring-cyan-300
+                    `;
+
+                    return (
+                        <button
+                            key={stepIndex}
+                            onClick={() => cycleStepPitch(trackIndex, stepIndex)}
+                            className={buttonClass}
+                        >
+                            {isActive ? pitchValue : null}
+                        </button>
+                    );
+                })}
+            </div>
+        ))}
+    </div>
+);
+
+interface TrackControlsProps {
+    clearTrack: (trackIndex: number) => void;
+}
+const TrackControls: React.FC<TrackControlsProps> = ({ clearTrack }) => (
+    <div className="w-full md:w-64 flex flex-col gap-2 p-2 bg-gray-900 rounded-lg">
+        {INSTRUMENTS.map((instrument, index) => (
+            <div key={instrument} className="h-full flex items-center justify-between text-sm text-gray-300 gap-3 px-2 py-1 bg-gray-800/50 rounded">
+                <span className="flex-1 truncate font-medium">{instrument}</span>
+                <button onClick={() => clearTrack(index)} className="text-gray-500 hover:text-red-500 text-xs font-semibold">clear</button>
+            </div>
+        ))}
+    </div>
+);
+
+interface PianoKeyboardProps {
+    playPianoNote: (frequency: number) => void;
+}
+const PianoKeyboard: React.FC<PianoKeyboardProps> = ({ playPianoNote }) => {
+    const [pressedKeys, setPressedKeys] = useState<Set<string>>(new Set());
+
+    useEffect(() => {
+        const keyMap = new Map(PIANO_NOTES.map(n => [n.key, n]));
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.repeat || pressedKeys.has(e.key)) return;
+            const note = keyMap.get(e.key.toLowerCase());
+            if (note) {
+                playPianoNote(note.freq);
+                setPressedKeys(prev => new Set(prev).add(e.key));
+            }
+        };
+        const handleKeyUp = (e: KeyboardEvent) => {
+             setPressedKeys(prev => {
+                const newSet = new Set(prev);
+                newSet.delete(e.key);
+                return newSet;
+             });
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        window.addEventListener('keyup', handleKeyUp);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+            window.removeEventListener('keyup', handleKeyUp);
+        };
+    }, [playPianoNote, pressedKeys]);
+    
+    const whiteKeys = PIANO_NOTES.filter(n => n.type === 'white');
+    const blackKeys = PIANO_NOTES.filter(n => n.type === 'black');
+
+    return (
+        <div className="relative w-full h-48" style={{ userSelect: 'none' }}>
+            {/* White Keys */}
+            <div className="absolute top-0 left-0 w-full h-full flex">
+                {whiteKeys.map(note => (
+                    <div key={note.note}
+                         onMouseDown={() => playPianoNote(note.freq)}
+                         className={`flex-1 h-full border-2 border-gray-900 rounded-b-md cursor-pointer transition-colors ${pressedKeys.has(note.key) ? 'bg-cyan-300' : 'bg-white'}`}>
+                    </div>
+                ))}
+            </div>
+             {/* Black Keys */}
+            <div className="absolute top-0 left-0 w-full h-2/3 flex pointer-events-none">
+                <div className="flex-1"></div>
+                {blackKeys.map((note, index) => {
+                    const isLastInGroup = note.note.includes('D#') || note.note.includes('A#');
+                    return (
+                       <div key={note.note} className="flex-1 flex justify-center" style={{marginLeft: '-3%', marginRight: '-3%'}}>
+                         <div onMouseDown={(e) => { e.stopPropagation(); playPianoNote(note.freq); }}
+                            className={`w-3/5 h-full bg-gray-800 border-2 border-gray-900 rounded-b-md cursor-pointer pointer-events-auto transition-colors ${pressedKeys.has(note.key) ? 'bg-cyan-500' : 'bg-gray-800'}`}
+                            style={{marginRight: isLastInGroup ? '12.5%' : '0' }}>
+                         </div>
+                       </div>
+                    );
+                })}
+                 <div className="flex-1"></div>
+            </div>
+        </div>
+    );
+};
+
+interface NavButtonProps {
+    targetView: View;
+    icon: React.ReactNode;
+    label: string;
+    currentView: View;
+    setView: (view: View) => void;
+}
+const NavButton: React.FC<NavButtonProps> = ({ targetView, icon, label, currentView, setView }) => (
+    <button onClick={() => setView(targetView)} className={`flex flex-col sm:flex-row items-center gap-2 px-3 py-2 text-sm font-medium rounded-md transition-colors ${currentView === targetView ? 'bg-cyan-500 text-white' : 'text-gray-300 hover:bg-gray-700'}`}>
+        {icon}
+        <span className="hidden sm:inline">{label}</span>
+    </button>
+);
+
 
 declare global {
     interface AIStudio {

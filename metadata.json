@@ -1,5 +1,5 @@
 {
-  "name": "Gemini Beat Machine Pro",
+  "name": "Ed Rock's Pro Beat Machine",
   "description": "An advanced music beat machine powered by Gemini. Generate beats with AI, create vocal samples with TTS, animate album art with Veo, get music production tips with Google Search, and control the sequencer with your voice.",
   "requestFramePermissions": [
     "microphone"
